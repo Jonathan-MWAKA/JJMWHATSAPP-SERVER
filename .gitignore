@@ -1,0 +1,5 @@
+.env
+node_modules/
+src/*.backup-*
+data/users.json
+data/messages.json
