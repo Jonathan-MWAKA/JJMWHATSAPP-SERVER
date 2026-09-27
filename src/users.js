@@ -255,12 +255,16 @@ function verifierCodeVerification(
 
 function trouverUtilisateurParNumero(numero) {
 
+    const numeroNormalise =
+        normaliserNumero(numero);
+
     const utilisateurs =
         chargerUtilisateurs();
 
     return utilisateurs.find(
         utilisateur =>
-            utilisateur.numero === numero
+            normaliserNumero(utilisateur.numero)
+            === numeroNormalise
     ) || null;
 }
 

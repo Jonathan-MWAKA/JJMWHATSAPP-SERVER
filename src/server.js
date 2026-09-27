@@ -482,6 +482,86 @@ app.get(
     }
 );
 
+app.post(
+    "/api/utilisateurs-par-numeros",
+    authentifierJJM,
+    (req, res) => {
+
+        const numeros =
+            Array.isArray(req.body.numeros)
+                ? req.body.numeros
+                : [];
+
+        if (numeros.length === 0) {
+            return res.json({
+                ok: true,
+                utilisateurs: []
+            });
+        }
+
+        const users =
+            require("./users");
+
+        const utilisateurs = [];
+
+        for (const numero of numeros) {
+
+            const utilisateur =
+                users.trouverUtilisateurParNumero(
+                    numero
+                );
+
+            if (utilisateur) {
+                utilisateurs.push({
+                    identifiant:
+                        utilisateur.identifiant,
+                    nom:
+                        utilisateur.nom,
+                    numero:
+                        utilisateur.numero
+                });
+            }
+        }
+
+        res.json({
+            ok: true,
+            utilisateurs
+        });
+    }
+);
+
+app.post(
+    "/api/statuts-utilisateurs",
+    authentifierJJM,
+    (req, res) => {
+
+        const identifiants =
+            Array.isArray(req.body.identifiants)
+                ? req.body.identifiants
+                : [];
+
+        const statuts = {};
+
+        for (const identifiant of identifiants) {
+
+            const id =
+                String(identifiant || "").trim();
+
+            if (!id) {
+                continue;
+            }
+
+            statuts[id] =
+                utilisateurConnecteJJM(id);
+        }
+
+        res.json({
+            ok: true,
+            statuts
+        });
+    }
+);
+
 app.get(
     "/api/messages-hors-ligne",
     authentifierJJM,
@@ -703,6 +783,16 @@ wss.on("connection", (socket, req) => {
                     destinataire
                 );
 
+            // Tous les messages sont sauvegardés,
+            // qu'ils soient envoyés en ligne ou conservés hors ligne.
+
+            messageJJM.livre =
+                destinataireEnLigne;
+
+            ajouterMessage(
+                messageJJM
+            );
+
             if (
                 destinataireEnLigne
             ) {
@@ -713,13 +803,12 @@ wss.on("connection", (socket, req) => {
                     )
                 );
 
-            } else {
-
-                messageJJM.livre = false;
-
-                ajouterMessage(
-                    messageJJM
+                console.log(
+                    "Message envoyé et sauvegardé :",
+                    destinataire
                 );
+
+            } else {
 
                 console.log(
                     "Message conservé hors ligne pour :",
