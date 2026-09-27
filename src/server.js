@@ -10,6 +10,7 @@ const {
     creerUtilisateur,
     verifierConnexion,
     trouverUtilisateurParNumero,
+    trouverUtilisateurParIdentifiant,
     creerCodeVerification,
     verifierCodeVerification
 } = require("./users");
@@ -410,12 +411,27 @@ function authentifierJJM(req, res, next) {
 
 app.get("/api/me", authentifierJJM, (req, res) => {
 
+    const utilisateur =
+        trouverUtilisateurParIdentifiant(
+            req.utilisateurJJM.identifiant
+        );
+
+    if (!utilisateur) {
+        return res.status(404).json({
+            ok: false,
+            message:
+                "Utilisateur introuvable."
+        });
+    }
+
     res.json({
         ok: true,
         utilisateur: {
-            id: req.utilisateurJJM.sub,
+            id: utilisateur.id,
             identifiant:
-                req.utilisateurJJM.identifiant
+                utilisateur.identifiant,
+            nom: utilisateur.nom,
+            numero: utilisateur.numero
         }
     });
 });
@@ -466,11 +482,34 @@ app.get(
     }
 );
 
+app.get(
+    "/api/messages-hors-ligne",
+    authentifierJJM,
+    (req, res) => {
+
+        const messages =
+            messagesPourUtilisateur(
+                req.utilisateurJJM.identifiant
+            );
+
+        res.json({
+            ok: true,
+            nombre: messages.length,
+            messages
+        });
+    }
+);
+
 app.get("/health", (req, res) => {
     res.json({
         ok: true,
         service: "JJMWHATSAPP",
-        message: "Serveur JJM opérationnel"
+        message: "Serveur JJM opérationnel",
+        websocket: {
+            actif: true,
+            utilisateursConnectes:
+                nombreUtilisateursConnectesJJM()
+        }
     });
 });
 

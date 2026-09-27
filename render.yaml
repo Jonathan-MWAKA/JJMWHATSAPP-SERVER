@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: serveur-jjm
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: JJM_JWT_SECRET
+        sync: false

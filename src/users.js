@@ -216,10 +216,21 @@ function trouverUtilisateurParNumero(numero) {
     ) || null;
 }
 
+
+function trouverUtilisateurParIdentifiant(identifiant) {
+    const utilisateurs = chargerUtilisateurs();
+
+    return utilisateurs.find(
+        utilisateur =>
+            utilisateur.identifiant === identifiant
+    ) || null;
+}
+
 module.exports = {
     creerUtilisateur,
     verifierConnexion,
     trouverUtilisateurParNumero,
+    trouverUtilisateurParIdentifiant,
     creerCodeVerification,
     verifierCodeVerification
 };
