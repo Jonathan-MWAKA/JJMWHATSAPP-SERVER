@@ -19,6 +19,37 @@ const fichier =
         "users.json"
     );
 
+
+function normaliserNumero(numero) {
+
+    let valeur =
+        String(numero || "").trim();
+
+    valeur =
+        valeur.replace(/[\s().-]/g, "");
+
+    if (valeur.startsWith("+")) {
+        valeur = valeur.substring(1);
+    }
+
+    if (valeur.startsWith("00")) {
+        valeur = valeur.substring(2);
+    }
+
+    if (valeur.startsWith("0")) {
+        valeur = "243" + valeur.substring(1);
+    }
+
+    return valeur;
+}
+
+function numeroValide(numero) {
+
+    return /^243\d{9}$/.test(
+        normaliserNumero(numero)
+    );
+}
+
 function chargerUtilisateurs() {
 
     if (!fs.existsSync(fichier)) {
@@ -67,13 +98,15 @@ async function creerUtilisateur(
     motDePasse
 ) {
 
+    numero = normaliserNumero(numero);
+
     const utilisateurs =
         chargerUtilisateurs();
 
     const existe =
         utilisateurs.find(
             utilisateur =>
-                utilisateur.numero === numero
+                normaliserNumero(utilisateur.numero) === numero
         );
 
     if (existe) {
@@ -121,13 +154,15 @@ async function verifierConnexion(
     motDePasse
 ) {
 
+    numero = normaliserNumero(numero);
+
     const utilisateurs =
         chargerUtilisateurs();
 
     const utilisateur =
         utilisateurs.find(
             utilisateur =>
-                utilisateur.numero === numero
+                normaliserNumero(utilisateur.numero) === numero
         );
 
     if (!utilisateur) {
@@ -245,5 +280,7 @@ module.exports = {
     trouverUtilisateurParNumero,
     trouverUtilisateurParIdentifiant,
     creerCodeVerification,
-    verifierCodeVerification
+    verifierCodeVerification,
+    normaliserNumero,
+    numeroValide
 };
