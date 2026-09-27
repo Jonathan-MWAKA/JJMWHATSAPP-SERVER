@@ -17,6 +17,7 @@ const {
 
 const {
     ajouterMessage,
+    chargerMessages,
     messagesPourUtilisateur,
     marquerCommeLivre
 } = require("./messages");
@@ -558,6 +559,56 @@ app.post(
         res.json({
             ok: true,
             statuts
+        });
+    }
+);
+
+app.post(
+    "/api/historique-conversation",
+    authentifierJJM,
+    (req, res) => {
+
+        const autreUtilisateur =
+            String(
+                req.body.autreUtilisateur || ""
+            ).trim();
+
+        if (!autreUtilisateur) {
+            return res.status(400).json({
+                ok: false,
+                erreur: "Utilisateur destinataire manquant"
+            });
+        }
+
+        const messages =
+            chargerMessages();
+
+        const identifiantConnecte =
+            req.utilisateur.identifiant;
+
+        const historique =
+            messages.filter(
+                message =>
+                    (
+                        message.expediteur ===
+                            identifiantConnecte
+                        &&
+                        message.destinataire ===
+                            autreUtilisateur
+                    )
+                    ||
+                    (
+                        message.expediteur ===
+                            autreUtilisateur
+                        &&
+                        message.destinataire ===
+                            identifiantConnecte
+                    )
+            );
+
+        res.json({
+            ok: true,
+            messages: historique
         });
     }
 );
