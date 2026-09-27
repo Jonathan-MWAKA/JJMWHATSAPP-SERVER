@@ -3,8 +3,21 @@ const path = require("path");
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 
+const dossierData =
+    path.join(__dirname, "..", "data");
+
+if (!fs.existsSync(dossierData)) {
+    fs.mkdirSync(
+        dossierData,
+        { recursive: true }
+    );
+}
+
 const fichier =
-    path.join(__dirname, "..", "data", "users.json");
+    path.join(
+        dossierData,
+        "users.json"
+    );
 
 function chargerUtilisateurs() {
 
