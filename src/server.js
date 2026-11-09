@@ -720,7 +720,7 @@ app.post(
             chargerMessages();
 
         const identifiantConnecte =
-            req.utilisateur.identifiant;
+            req.utilisateurJJM.identifiant;
 
         const historique =
             messages.filter(
