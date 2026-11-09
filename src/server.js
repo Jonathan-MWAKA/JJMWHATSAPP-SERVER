@@ -1,6 +1,9 @@
 require("dotenv").config();
 
 const express = require("express");
+const crypto = require("crypto");
+const path = require("path");
+const fs = require("fs");
 const cors = require("cors");
 const http = require("http");
 const WebSocket = require("ws");
@@ -13,6 +16,43 @@ cloudinary.config({
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
+
+
+const uploadStatut = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const types = [
+            "image/jpeg", "image/png", "image/webp",
+            "video/mp4", "video/webm", "video/quicktime"
+        ];
+        if (!types.includes(file.mimetype)) {
+            return cb(new Error("Format refusé. Utilise JPG, PNG, WebP, MP4 ou WebM."));
+        }
+        cb(null, true);
+    }
+});
+
+const fichierStatuts = path.join(__dirname, "..", "data", "statuts.json");
+
+function lireStatutsJJM() {
+    try {
+        if (!fs.existsSync(fichierStatuts)) return [];
+        const donnees = JSON.parse(fs.readFileSync(fichierStatuts, "utf8"));
+        return Array.isArray(donnees) ? donnees : [];
+    } catch (e) {
+        console.error("Lecture des statuts impossible.");
+        return [];
+    }
+}
+
+function sauvegarderStatutsJJM(statuts) {
+    const dossier = path.dirname(fichierStatuts);
+    fs.mkdirSync(dossier, { recursive: true });
+    const temporaire = fichierStatuts + ".tmp";
+    fs.writeFileSync(temporaire, JSON.stringify(statuts, null, 2), "utf8");
+    fs.renameSync(temporaire, fichierStatuts);
+}
 
 const uploadPhoto = multer({
     storage: multer.memoryStorage(),
@@ -696,6 +736,143 @@ app.post(
             ok: true,
             statuts
         });
+    }
+);
+
+
+app.post(
+    "/api/statuts",
+    authentifierJJM,
+    (req, res, next) => {
+        uploadStatut.single("media")(req, res, (erreur) => {
+            if (erreur) {
+                const code = erreur.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+                return res.status(code).json({
+                    ok: false,
+                    message: erreur.message || "Média invalide."
+                });
+            }
+            next();
+        });
+    },
+    async (req, res) => {
+        if (!req.file) {
+            return res.status(400).json({
+                ok: false,
+                message: "Aucune photo ou vidéo reçue."
+            });
+        }
+
+        if (
+            !process.env.CLOUDINARY_CLOUD_NAME ||
+            !process.env.CLOUDINARY_API_KEY ||
+            !process.env.CLOUDINARY_API_SECRET
+        ) {
+            return res.status(503).json({
+                ok: false,
+                message: "Le stockage Cloudinary n'est pas configuré."
+            });
+        }
+
+        const identifiant = req.utilisateurJJM.identifiant;
+        const compte = trouverUtilisateurParIdentifiant(identifiant);
+
+        if (!compte) {
+            return res.status(404).json({
+                ok: false,
+                message: "Compte JJM introuvable."
+            });
+        }
+
+        const typeMedia = req.file.mimetype.startsWith("video/")
+            ? "video"
+            : "image";
+
+        try {
+            const resultat = await new Promise((resolve, reject) => {
+                const flux = cloudinary.uploader.upload_stream({
+                    folder: "jjmwhatsapp/statuts",
+                    public_id: crypto.randomUUID(),
+                    resource_type: "auto",
+                    overwrite: false
+                }, (erreur, resultatCloudinary) => {
+                    if (erreur) return reject(erreur);
+                    resolve(resultatCloudinary);
+                });
+                flux.end(req.file.buffer);
+            });
+
+            const maintenant = Date.now();
+            const statut = {
+                id: crypto.randomUUID(),
+                identifiant,
+                nom: compte.nom || identifiant,
+                photoProfil: compte.photoProfil || "",
+                mediaUrl: resultat.secure_url,
+                mediaType: typeMedia,
+                texte: String(req.body.texte || "").trim().slice(0, 500),
+                creeLe: maintenant,
+                expireLe: maintenant + 24 * 60 * 60 * 1000,
+                vues: []
+            };
+
+            const statuts = lireStatutsJJM().filter(
+                element => Number(element.expireLe) > maintenant
+            );
+            statuts.push(statut);
+            sauvegarderStatutsJJM(statuts);
+
+            return res.status(201).json({
+                ok: true,
+                statut,
+                message: "Statut publié."
+            });
+        } catch (erreur) {
+            console.error("Publication statut Cloudinary :", erreur.message);
+            return res.status(502).json({
+                ok: false,
+                message: "Impossible de publier ce statut."
+            });
+        }
+    }
+);
+
+app.get(
+    "/api/statuts",
+    authentifierJJM,
+    (req, res) => {
+        const maintenant = Date.now();
+        const statuts = lireStatutsJJM().filter(
+            element => Number(element.expireLe) > maintenant
+        );
+        res.json({ ok: true, statuts });
+    }
+);
+
+app.post(
+    "/api/statuts/:id/vue",
+    authentifierJJM,
+    (req, res) => {
+        const maintenant = Date.now();
+        const identifiant = req.utilisateurJJM.identifiant;
+        const statuts = lireStatutsJJM().filter(
+            element => Number(element.expireLe) > maintenant
+        );
+        const statut = statuts.find(element => element.id === req.params.id);
+
+        if (!statut) {
+            return res.status(404).json({
+                ok: false,
+                message: "Ce statut n'existe plus."
+            });
+        }
+
+        if (statut.identifiant !== identifiant && !statut.vues.includes(identifiant)) {
+            statut.vues.push(identifiant);
+            sauvegarderStatutsJJM(statuts);
+        }
+
+        res.json({ ok: true });
     }
 );
 
