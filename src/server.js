@@ -5,6 +5,30 @@ const cors = require("cors");
 const http = require("http");
 const WebSocket = require("ws");
 const jwt = require("jsonwebtoken");
+const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+const uploadPhoto = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const typesAutorises = [
+            "image/jpeg",
+            "image/png",
+            "image/webp"
+        ];
+        if (!typesAutorises.includes(file.mimetype)) {
+            return cb(new Error("Format refusé. Utilise JPG, PNG ou WebP."));
+        }
+        cb(null, true);
+    }
+});
 
 const {
     creerUtilisateur,
@@ -12,7 +36,8 @@ const {
     trouverUtilisateurParNumero,
     trouverUtilisateurParIdentifiant,
     creerCodeVerification,
-    verifierCodeVerification
+    verifierCodeVerification,
+    mettreAJourPhotoProfil
 } = require("./users");
 
 const {
@@ -61,6 +86,33 @@ function nombreUtilisateursConnectesJJM() {
     }
 
     return nombre;
+}
+
+
+function diffuserPresenceJJM(
+    type,
+    identifiant
+) {
+
+    const message =
+        JSON.stringify({
+            type: type,
+            identifiant: identifiant
+        });
+
+    for (
+        const socket
+        of connexionsJJM.values()
+    ) {
+
+        if (
+            socket.readyState
+                === WebSocket.OPEN
+        ) {
+
+            socket.send(message);
+        }
+    }
 }
 
 app.use(cors());
@@ -410,6 +462,87 @@ function authentifierJJM(req, res, next) {
     }
 }
 
+
+app.post(
+    "/api/profil/photo",
+    authentifierJJM,
+    (req, res, next) => {
+        uploadPhoto.single("photo")(req, res, (erreur) => {
+            if (erreur) {
+                const statut = erreur.code === "LIMIT_FILE_SIZE" ? 413 : 400;
+                return res.status(statut).json({
+                    ok: false,
+                    message: erreur.message || "Photo invalide."
+                });
+            }
+            next();
+        });
+    },
+    (req, res) => {
+        if (!req.file) {
+            return res.status(400).json({
+                ok: false,
+                message: "Aucune photo reçue."
+            });
+        }
+
+        if (
+            !process.env.CLOUDINARY_CLOUD_NAME ||
+            !process.env.CLOUDINARY_API_KEY ||
+            !process.env.CLOUDINARY_API_SECRET
+        ) {
+            return res.status(503).json({
+                ok: false,
+                message: "Le stockage des photos n'est pas configuré."
+            });
+        }
+
+        const identifiant = req.utilisateurJJM.identifiant;
+
+        const flux = cloudinary.uploader.upload_stream(
+            {
+                folder: "jjmwhatsapp/profils",
+                public_id: identifiant + "_profil",
+                overwrite: true,
+                resource_type: "image",
+                transformation: [
+                    { width: 800, height: 800, crop: "limit" }
+                ]
+            },
+            (erreur, resultat) => {
+                if (erreur) {
+                    console.error("Erreur Cloudinary :", erreur.message);
+                    return res.status(502).json({
+                        ok: false,
+                        message: "Impossible d'enregistrer la photo."
+                    });
+                }
+
+                const compte = mettreAJourPhotoProfil(
+                    identifiant,
+                    resultat.secure_url,
+                    resultat.public_id
+                );
+
+                if (!compte) {
+                    return res.status(404).json({
+                        ok: false,
+                        message: "Compte JJM introuvable."
+                    });
+                }
+
+                return res.json({
+                    ok: true,
+                    photoProfil: compte.photoProfil,
+                    message: "Photo de profil mise à jour."
+                });
+            }
+        );
+
+        flux.end(req.file.buffer);
+    }
+);
+
 app.get("/api/me", authentifierJJM, (req, res) => {
 
     const utilisateur =
@@ -432,7 +565,8 @@ app.get("/api/me", authentifierJJM, (req, res) => {
             identifiant:
                 utilisateur.identifiant,
             nom: utilisateur.nom,
-            numero: utilisateur.numero
+            numero: utilisateur.numero,
+                photoProfil: utilisateur.photoProfil || ""
         }
     });
 });
@@ -477,7 +611,8 @@ app.get(
                 nom:
                     utilisateur.nom,
                 numero:
-                    utilisateur.numero
+                    utilisateur.numero,
+                photoProfil: utilisateur.photoProfil || ""
             }
         });
     }
@@ -519,7 +654,8 @@ app.post(
                     nom:
                         utilisateur.nom,
                     numero:
-                        utilisateur.numero
+                        utilisateur.numero,
+                photoProfil: utilisateur.photoProfil || ""
                 });
             }
         }
@@ -695,6 +831,11 @@ wss.on("connection", (socket, req) => {
         console.log(
             "Utilisateurs WebSocket connectés :",
             nombreUtilisateursConnectesJJM()
+        );
+
+        diffuserPresenceJJM(
+            "utilisateur_en_ligne",
+            contenu.identifiant
         );
 
         socket.send(
@@ -913,6 +1054,11 @@ wss.on("connection", (socket, req) => {
             === socket
         ) {
             connexionsJJM.delete(
+                identifiant
+            );
+
+            diffuserPresenceJJM(
+                "utilisateur_hors_ligne",
                 identifiant
             );
         }

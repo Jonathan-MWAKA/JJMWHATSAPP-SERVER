@@ -278,8 +278,31 @@ function trouverUtilisateurParIdentifiant(identifiant) {
     ) || null;
 }
 
+
+function mettreAJourPhotoProfil(identifiant, photoProfil, photoProfilPublicId) {
+    const utilisateurs = chargerUtilisateurs();
+    const utilisateur = utilisateurs.find(
+        element => element.identifiant === identifiant
+    );
+
+    if (!utilisateur) {
+        return null;
+    }
+
+    utilisateur.photoProfil = photoProfil;
+    utilisateur.photoProfilPublicId = photoProfilPublicId;
+
+    sauvegarderUtilisateurs(utilisateurs);
+
+    return {
+        identifiant: utilisateur.identifiant,
+        photoProfil: utilisateur.photoProfil
+    };
+}
+
 module.exports = {
     creerUtilisateur,
+    mettreAJourPhotoProfil,
     verifierConnexion,
     trouverUtilisateurParNumero,
     trouverUtilisateurParIdentifiant,
