@@ -74,10 +74,13 @@ const {
     creerUtilisateur,
     verifierConnexion,
     trouverUtilisateurParNumero,
+    trouverUtilisateurParEmail,
     trouverUtilisateurParIdentifiant,
     creerCodeVerification,
     verifierCodeVerification,
-    mettreAJourPhotoProfil
+    mettreAJourPhotoProfil,
+    normaliserNumero,
+    numeroValide
 } = require("./users");
 
 const {
@@ -91,6 +94,8 @@ const app = express();
 const serveur = http.createServer(app);
 
 const PORT = process.env.PORT || 8080;
+
+const demandesInscriptionJJM = new Map();
 
 const connexionsJJM = new Map();
 
@@ -157,6 +162,332 @@ function diffuserPresenceJJM(
 
 app.use(cors());
 app.use(express.json());
+
+
+// ======================================================
+// INSCRIPTION JJMWHATSAPP AVEC VERIFICATION BREVO
+// ======================================================
+
+const codesInscriptionEmailJJM = new Map();
+const demandesInscriptionEmailJJM = new Map();
+
+function emailInscriptionValide(email) {
+    return email.length <= 254
+        && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+app.post("/api/inscription/demander-code", async (req, res) => {
+    try {
+        const email = String(req.body.email || "").trim().toLowerCase();
+        const numero = normaliserNumero(req.body.numero || "");
+
+        if (!emailInscriptionValide(email) || !numeroValide(numero)) {
+            return res.status(400).json({
+                ok: false,
+                message: "Adresse e-mail ou numéro de téléphone invalide."
+            });
+        }
+
+        if (trouverUtilisateurParNumero(numero)) {
+            return res.status(409).json({
+                ok: false,
+                message: "Ce numéro possède déjà un compte JJM."
+            });
+        }
+
+        if (trouverUtilisateurParEmail(email)) {
+            return res.status(409).json({
+                ok: false,
+                message: "Cette adresse e-mail possède déjà un compte JJM."
+            });
+        }
+
+        const apiKey = process.env.BREVO_API_KEY;
+        const senderEmail = process.env.BREVO_SENDER_EMAIL;
+        const senderName = process.env.BREVO_SENDER_NAME || "JJMWHATSAPP";
+
+        if (!apiKey || !senderEmail || !process.env.JJM_JWT_SECRET) {
+            return res.status(503).json({
+                ok: false,
+                message: "Le service de vérification e-mail n'est pas configuré."
+            });
+        }
+
+        const maintenant = Date.now();
+        const derniereDemande =
+            demandesInscriptionEmailJJM.get(email) || 0;
+
+        if (maintenant - derniereDemande < 60000) {
+            return res.status(429).json({
+                ok: false,
+                message: "Attends 60 secondes avant de demander un autre code."
+            });
+        }
+
+        const code = String(crypto.randomInt(100000, 1000000));
+
+        const resultat = await fetch(
+            "https://api.brevo.com/v3/smtp/email",
+            {
+                method: "POST",
+                headers: {
+                    "accept": "application/json",
+                    "api-key": apiKey,
+                    "content-type": "application/json"
+                },
+                body: JSON.stringify({
+                    sender: {
+                        name: senderName,
+                        email: senderEmail
+                    },
+                    to: [{ email }],
+                    subject: "Ton code de vérification JJMWHATSAPP",
+                    textContent:
+                        "Ton code JJMWHATSAPP est : " + code
+                        + ". Il expire dans 10 minutes.",
+                    htmlContent:
+                        "<div style='font-family:Arial,sans-serif'>"
+                        + "<h2>JJMWHATSAPP</h2>"
+                        + "<p>Voici ton code de vérification :</p>"
+                        + "<h1 style='letter-spacing:8px'>" + code + "</h1>"
+                        + "<p>Ce code expire dans 10 minutes.</p>"
+                        + "<p>Si tu n'es pas à l'origine de cette demande, ignore cet e-mail.</p>"
+                        + "</div>"
+                })
+            }
+        );
+
+        const donnees = await resultat.json().catch(() => ({}));
+
+        if (!resultat.ok) {
+            console.error(
+                "Brevo refus :",
+                resultat.status,
+                donnees.message || donnees.code || "erreur"
+            );
+
+            return res.status(502).json({
+                ok: false,
+                message: "Brevo n'a pas pu envoyer l'e-mail. Vérifie l'expéditeur dans Brevo."
+            });
+        }
+
+        demandesInscriptionEmailJJM.set(email, maintenant);
+        codesInscriptionEmailJJM.set(email, {
+            code,
+            numero,
+            expiration: maintenant + 10 * 60 * 1000,
+            tentatives: 0
+        });
+
+        return res.json({
+            ok: true,
+            message: "Code de vérification envoyé par e-mail."
+        });
+
+    } catch (e) {
+        console.error("Erreur demande code e-mail :", e.message);
+        return res.status(500).json({
+            ok: false,
+            message: "Impossible d'envoyer le code par e-mail."
+        });
+    }
+});
+
+
+app.post("/api/inscription/verifier-code", async (req, res) => {
+    try {
+        const email = String(req.body.email || "").trim().toLowerCase();
+        const numero = normaliserNumero(req.body.numero || "");
+        const code = String(req.body.code || "").trim();
+        const secret = process.env.JJM_JWT_SECRET;
+
+        if (!emailInscriptionValide(email)
+                || !numeroValide(numero)
+                || !/^\d{6}$/.test(code)) {
+            return res.status(400).json({
+                ok: false,
+                message: "E-mail, numéro ou code à six chiffres invalide."
+            });
+        }
+
+        if (!secret) {
+            return res.status(503).json({
+                ok: false,
+                message: "Service de vérification non configuré."
+            });
+        }
+
+        const verification = codesInscriptionEmailJJM.get(email);
+
+        if (!verification || verification.numero !== numero) {
+            return res.status(401).json({
+                ok: false,
+                message: "Code absent ou expiré. Demande un nouveau code."
+            });
+        }
+
+        if (Date.now() > verification.expiration) {
+            codesInscriptionEmailJJM.delete(email);
+            return res.status(401).json({
+                ok: false,
+                message: "Code expiré. Demande un nouveau code."
+            });
+        }
+
+        verification.tentatives++;
+
+        const attendu = Buffer.from(verification.code);
+        const recu = Buffer.from(code);
+
+        const correct = attendu.length === recu.length
+            && crypto.timingSafeEqual(attendu, recu);
+
+        if (!correct) {
+            if (verification.tentatives >= 5) {
+                codesInscriptionEmailJJM.delete(email);
+                return res.status(401).json({
+                    ok: false,
+                    message: "Trop de tentatives. Demande un nouveau code."
+                });
+            }
+
+            return res.status(401).json({
+                ok: false,
+                message: "Code incorrect. Vérifie les six chiffres."
+            });
+        }
+
+        codesInscriptionEmailJJM.delete(email);
+
+        const inscriptionToken = jwt.sign(
+            {
+                purpose: "jjm_inscription_email",
+                numero,
+                email
+            },
+            secret,
+            { expiresIn: "10m" }
+        );
+
+        return res.json({
+            ok: true,
+            message: "Adresse e-mail vérifiée.",
+            inscriptionToken
+        });
+
+    } catch (e) {
+        console.error("Erreur vérification e-mail :", e.message);
+        return res.status(500).json({
+            ok: false,
+            message: "Impossible de vérifier le code."
+        });
+    }
+});
+
+
+app.post("/api/inscription/creer-compte", async (req, res) => {
+    try {
+        const nom = String(req.body.nom || "").trim();
+        const inscriptionToken = String(req.body.inscriptionToken || "");
+        const secret = process.env.JJM_JWT_SECRET;
+
+        if (!secret) {
+            return res.status(503).json({
+                ok: false,
+                message: "Le service d'inscription n'est pas configuré."
+            });
+        }
+
+        if (nom.length < 2 || nom.length > 60 || !inscriptionToken) {
+            return res.status(400).json({
+                ok: false,
+                message: "Nom et autorisation de vérification obligatoires."
+            });
+        }
+
+        let autorisation;
+
+        try {
+            autorisation = jwt.verify(inscriptionToken, secret);
+        } catch (e) {
+            return res.status(401).json({
+                ok: false,
+                message: "Vérification expirée. Recommence l'inscription."
+            });
+        }
+
+        if (
+            autorisation.purpose !== "jjm_inscription_email"
+            || !numeroValide(autorisation.numero)
+            || !emailInscriptionValide(String(autorisation.email || ""))
+        ) {
+            return res.status(401).json({
+                ok: false,
+                message: "Autorisation d'inscription invalide."
+            });
+        }
+
+        const numero = normaliserNumero(autorisation.numero);
+        const email = String(autorisation.email).trim().toLowerCase();
+
+        if (trouverUtilisateurParNumero(numero)) {
+            return res.status(409).json({
+                ok: false,
+                message: "Ce numéro possède déjà un compte JJM."
+            });
+        }
+
+        if (trouverUtilisateurParEmail(email)) {
+            return res.status(409).json({
+                ok: false,
+                message: "Cette adresse e-mail possède déjà un compte JJM."
+            });
+        }
+
+        const motDePasseAleatoire = crypto.randomBytes(48).toString("hex");
+
+        const utilisateur = await creerUtilisateur(
+            nom,
+            numero,
+            motDePasseAleatoire,
+            email
+        );
+
+        const token = jwt.sign(
+            {
+                sub: utilisateur.id,
+                identifiant: utilisateur.identifiant
+            },
+            secret,
+            { expiresIn: "30d" }
+        );
+
+        return res.status(201).json({
+            ok: true,
+            token,
+            utilisateur: {
+                id: utilisateur.id,
+                identifiant: utilisateur.identifiant,
+                nom: utilisateur.nom,
+                numero: utilisateur.numero,
+                email: utilisateur.email
+            }
+        });
+
+    } catch (e) {
+        console.error("Erreur création compte vérifié :", e.message);
+        return res.status(409).json({
+            ok: false,
+            message: e.message || "Création du compte impossible."
+        });
+    }
+});
+
+// FIN INSCRIPTION JJMWHATSAPP AVEC VERIFICATION BREVO
+
+
+
 
 app.post(
     "/api/demander-code",

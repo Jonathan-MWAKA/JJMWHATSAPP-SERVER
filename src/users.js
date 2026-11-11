@@ -45,7 +45,9 @@ function normaliserNumero(numero) {
 
 function numeroValide(numero) {
 
-    return /^243\d{9}$/.test(
+    // Format international E.164 sans le signe + :
+    // 8 à 15 chiffres, sans zéro initial.
+    return /^[1-9]\d{7,14}$/.test(
         normaliserNumero(numero)
     );
 }
@@ -95,13 +97,30 @@ function genererIdentifiant() {
 async function creerUtilisateur(
     nom,
     numero,
-    motDePasse
+    motDePasse,
+    email = null
 ) {
 
     numero = normaliserNumero(numero);
 
+    email = email ? String(email).trim().toLowerCase() : "";
+
+    if (email && (
+        email.length > 254
+        || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)
+    )) {
+        throw new Error("Adresse e-mail invalide.");
+    }
+
     const utilisateurs =
         chargerUtilisateurs();
+
+    if (email && utilisateurs.some(
+        utilisateur =>
+            String(utilisateur.email || "").toLowerCase() === email
+    )) {
+        throw new Error("Cette adresse e-mail possède déjà un compte JJM.");
+    }
 
     const existe =
         utilisateurs.find(
@@ -131,6 +150,8 @@ async function creerUtilisateur(
 
         nom,
         numero,
+
+        ...(email ? { email } : {}),
 
         motDePasseHash,
 
@@ -269,6 +290,17 @@ function trouverUtilisateurParNumero(numero) {
 }
 
 
+function trouverUtilisateurParEmail(email) {
+    const valeur = String(email || "").trim().toLowerCase();
+    if (!valeur) return null;
+
+    return chargerUtilisateurs().find(
+        utilisateur =>
+            String(utilisateur.email || "").toLowerCase() === valeur
+    ) || null;
+}
+
+
 function trouverUtilisateurParIdentifiant(identifiant) {
     const utilisateurs = chargerUtilisateurs();
 
@@ -305,6 +337,7 @@ module.exports = {
     mettreAJourPhotoProfil,
     verifierConnexion,
     trouverUtilisateurParNumero,
+    trouverUtilisateurParEmail,
     trouverUtilisateurParIdentifiant,
     creerCodeVerification,
     verifierCodeVerification,
