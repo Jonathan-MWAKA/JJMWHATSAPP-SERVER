@@ -107,7 +107,7 @@ async function creerUtilisateur(
 
     if (email && (
         email.length > 254
-        || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)
+        || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
     )) {
         throw new Error("Adresse e-mail invalide.");
     }
