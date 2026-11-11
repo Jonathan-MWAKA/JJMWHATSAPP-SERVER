@@ -1163,10 +1163,21 @@ app.post(
                 message: "Statut publié."
             });
         } catch (erreur) {
-            console.error("Publication statut Cloudinary :", erreur.message);
+            const detail = String(
+                erreur.message || erreur.error?.message || "Erreur Cloudinary inconnue."
+            ).slice(0, 300);
+
+            console.error("===== ERREUR PUBLICATION STATUT =====");
+            console.error("Nom :", erreur.name || "Inconnu");
+            console.error("Code HTTP Cloudinary :", erreur.http_code || "Inconnu");
+            console.error("Code erreur :", erreur.code || "Inconnu");
+            console.error("Message :", detail);
+            console.error("Request ID :", erreur.request_id || "Non disponible");
+            console.error("===== FIN ERREUR STATUT =====");
+
             return res.status(502).json({
                 ok: false,
-                message: "Impossible de publier ce statut."
+                message: "Erreur Cloudinary : " + detail
             });
         }
     }
