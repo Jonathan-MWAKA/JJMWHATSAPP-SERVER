@@ -1296,6 +1296,382 @@ const wss = new WebSocket.Server({
     server: serveur
 });
 
+
+// ======================================================
+// APPELS AUDIO / VIDEO JJM - SIGNALISATION SECURISEE
+// ======================================================
+
+const appelsActifsJJM = new Map();
+const appelsParUtilisateurJJM = new Map();
+
+const fichierAppelsJJM = path.join(
+    __dirname,
+    "..",
+    "data",
+    "appels.json"
+);
+
+function envoyerEvenementAppelJJM(identifiant, evenement) {
+    const socket = connexionsJJM.get(identifiant);
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return false;
+    }
+
+    socket.send(JSON.stringify(evenement));
+    return true;
+}
+
+function enregistrerHistoriqueAppelJJM(appel, statut) {
+    try {
+        const dossier = path.dirname(fichierAppelsJJM);
+        fs.mkdirSync(dossier, { recursive: true });
+
+        let historique = [];
+
+        if (fs.existsSync(fichierAppelsJJM)) {
+            try {
+                const contenu = JSON.parse(
+                    fs.readFileSync(fichierAppelsJJM, "utf8")
+                );
+                if (Array.isArray(contenu)) {
+                    historique = contenu;
+                }
+            } catch (_) {
+                historique = [];
+            }
+        }
+
+        const fin = new Date();
+        const debut = new Date(appel.dateDebut);
+
+        historique.unshift({
+            id: appel.id,
+            appelant: appel.appelant,
+            destinataire: appel.destinataire,
+            mode: appel.mode,
+            statut,
+            dateDebut: appel.dateDebut,
+            dateAcceptation: appel.dateAcceptation || null,
+            dateFin: fin.toISOString(),
+            dureeSecondes: appel.dateAcceptation
+                ? Math.max(
+                    0,
+                    Math.floor((fin.getTime() -
+                        new Date(appel.dateAcceptation).getTime()) / 1000)
+                )
+                : 0
+        });
+
+        historique = historique.slice(0, 1000);
+
+        const temporaire = fichierAppelsJJM + ".tmp";
+
+        fs.writeFileSync(
+            temporaire,
+            JSON.stringify(historique, null, 2),
+            "utf8"
+        );
+
+        fs.renameSync(temporaire, fichierAppelsJJM);
+
+    } catch (erreur) {
+        console.error(
+            "Enregistrement de l'historique des appels impossible :",
+            erreur.message
+        );
+    }
+}
+
+function finaliserAppelJJM(appel, statut) {
+    if (!appel || !appelsActifsJJM.has(appel.id)) {
+        return;
+    }
+
+    if (appel.timerSonnerie) {
+        clearTimeout(appel.timerSonnerie);
+        appel.timerSonnerie = null;
+    }
+
+    appel.statut = statut;
+
+    enregistrerHistoriqueAppelJJM(appel, statut);
+
+    appelsActifsJJM.delete(appel.id);
+
+    if (appelsParUtilisateurJJM.get(appel.appelant) === appel.id) {
+        appelsParUtilisateurJJM.delete(appel.appelant);
+    }
+
+    if (appelsParUtilisateurJJM.get(appel.destinataire) === appel.id) {
+        appelsParUtilisateurJJM.delete(appel.destinataire);
+    }
+}
+
+function traiterEvenementAppelJJM(socket, message) {
+    const types = [
+        "appel_demande",
+        "appel_accepte",
+        "appel_refuse",
+        "appel_termine",
+        "offre_webrtc",
+        "reponse_webrtc",
+        "candidat_ice"
+    ];
+
+    if (!types.includes(message.type)) {
+        return false;
+    }
+
+    const emetteur = String(
+        socket.utilisateurJJM.identifiant || ""
+    );
+
+    function erreur(texte) {
+        socket.send(JSON.stringify({
+            type: "erreur_appel",
+            ok: false,
+            message: texte
+        }));
+    }
+
+    if (message.type === "appel_demande") {
+        const destinataire = String(
+            message.destinataire || ""
+        ).trim();
+
+        const mode = String(
+            message.mode || "audio"
+        ).toLowerCase();
+
+        if (
+            !destinataire ||
+            destinataire.length > 100 ||
+            destinataire === emetteur ||
+            !["audio", "video"].includes(mode)
+        ) {
+            erreur("Destinataire ou type d'appel invalide.");
+            return true;
+        }
+
+        if (!trouverUtilisateurParIdentifiant(destinataire)) {
+            erreur("Cet utilisateur n'existe pas.");
+            return true;
+        }
+
+        if (!utilisateurConnecteJJM(destinataire)) {
+            erreur("Cet utilisateur n'est pas en ligne.");
+            return true;
+        }
+
+        if (
+            appelsParUtilisateurJJM.has(emetteur) ||
+            appelsParUtilisateurJJM.has(destinataire)
+        ) {
+            erreur("Un des utilisateurs est déjà en communication.");
+            return true;
+        }
+
+        const appel = {
+            id: crypto.randomUUID(),
+            appelant: emetteur,
+            destinataire,
+            mode,
+            statut: "sonnerie",
+            dateDebut: new Date().toISOString(),
+            dateAcceptation: null,
+            timerSonnerie: null
+        };
+
+        appelsActifsJJM.set(appel.id, appel);
+        appelsParUtilisateurJJM.set(emetteur, appel.id);
+        appelsParUtilisateurJJM.set(destinataire, appel.id);
+
+        const transmis = envoyerEvenementAppelJJM(
+            destinataire,
+            {
+                type: "appel_entrant",
+                appelId: appel.id,
+                appelant: emetteur,
+                mode,
+                date: appel.dateDebut
+            }
+        );
+
+        if (!transmis) {
+            finaliserAppelJJM(appel, "indisponible");
+            erreur("Impossible de joindre cet utilisateur.");
+            return true;
+        }
+
+        socket.send(JSON.stringify({
+            type: "appel_sortant",
+            ok: true,
+            appelId: appel.id,
+            destinataire,
+            mode
+        }));
+
+        // Expiration automatique après 45 secondes sans réponse.
+        appel.timerSonnerie = setTimeout(() => {
+            if (
+                appelsActifsJJM.get(appel.id) !== appel ||
+                appel.statut !== "sonnerie"
+            ) {
+                return;
+            }
+
+            finaliserAppelJJM(appel, "manque");
+
+            const evenementFin = {
+                type: "appel_termine",
+                appelId: appel.id,
+                raison: "sans_reponse"
+            };
+
+            envoyerEvenementAppelJJM(appel.appelant, evenementFin);
+            envoyerEvenementAppelJJM(appel.destinataire, evenementFin);
+        }, 45000);
+
+        return true;
+    }
+
+    const appelId = String(message.appelId || "").trim();
+    const appel = appelsActifsJJM.get(appelId);
+
+    if (!appel) {
+        erreur("Cet appel n'existe plus.");
+        return true;
+    }
+
+    const estAppelant = appel.appelant === emetteur;
+    const estDestinataire = appel.destinataire === emetteur;
+
+    if (!estAppelant && !estDestinataire) {
+        erreur("Tu ne participes pas à cet appel.");
+        return true;
+    }
+
+    const autreParticipant = estAppelant
+        ? appel.destinataire
+        : appel.appelant;
+
+    if (message.type === "appel_accepte") {
+        if (
+            !estDestinataire ||
+            appel.statut !== "sonnerie"
+        ) {
+            erreur("Acceptation d'appel non autorisée.");
+            return true;
+        }
+
+        appel.statut = "actif";
+        appel.dateAcceptation = new Date().toISOString();
+
+        if (appel.timerSonnerie) {
+            clearTimeout(appel.timerSonnerie);
+            appel.timerSonnerie = null;
+        }
+
+        envoyerEvenementAppelJJM(autreParticipant, {
+            type: "appel_accepte",
+            appelId,
+            par: emetteur
+        });
+
+        return true;
+    }
+
+    if (message.type === "appel_refuse") {
+        if (
+            !estDestinataire ||
+            appel.statut !== "sonnerie"
+        ) {
+            erreur("Refus d'appel non autorisé.");
+            return true;
+        }
+
+        finaliserAppelJJM(appel, "refuse");
+
+        envoyerEvenementAppelJJM(autreParticipant, {
+            type: "appel_refuse",
+            appelId,
+            par: emetteur
+        });
+
+        socket.send(JSON.stringify({
+            type: "appel_refus_confirme",
+            ok: true,
+            appelId
+        }));
+
+        return true;
+    }
+
+    if (message.type === "appel_termine") {
+        const statut = appel.statut === "sonnerie"
+            ? (estAppelant ? "annule" : "manque")
+            : "termine";
+
+        finaliserAppelJJM(appel, statut);
+
+        envoyerEvenementAppelJJM(autreParticipant, {
+            type: "appel_termine",
+            appelId,
+            par: emetteur
+        });
+
+        return true;
+    }
+
+    // Les données WebRTC ne sont échangées qu'après acceptation.
+    if (appel.statut !== "actif") {
+        erreur("L'appel doit être accepté avant la connexion audio/vidéo.");
+        return true;
+    }
+
+    const donnees = message.donnees;
+
+    if (
+        !donnees ||
+        typeof donnees !== "object" ||
+        Array.isArray(donnees)
+    ) {
+        erreur("Données WebRTC invalides.");
+        return true;
+    }
+
+    const taille = Buffer.byteLength(
+        JSON.stringify(donnees),
+        "utf8"
+    );
+
+    if (taille > 65536) {
+        erreur("Données WebRTC trop volumineuses.");
+        return true;
+    }
+
+    const transmis = envoyerEvenementAppelJJM(
+        autreParticipant,
+        {
+            type: message.type,
+            appelId,
+            donnees
+        }
+    );
+
+    if (!transmis) {
+        erreur("L'autre participant est déconnecté.");
+    }
+
+    return true;
+}
+
+// ======================================================
+// FIN SIGNALISATION APPELS
+// ======================================================
+
+
 wss.on("connection", (socket, req) => {
 
     const url =
@@ -1304,8 +1680,16 @@ wss.on("connection", (socket, req) => {
             "http://" + req.headers.host
         );
 
+    const authorization =
+        String(req.headers.authorization || "");
+
     const token =
-        url.searchParams.get("token");
+        url.searchParams.get("token")
+        || (
+            /^Bearer\s+/i.test(authorization)
+                ? authorization.replace(/^Bearer\s+/i, "").trim()
+                : ""
+        );
 
     const secret =
         process.env.JJM_JWT_SECRET;
@@ -1412,6 +1796,10 @@ wss.on("connection", (socket, req) => {
                 JSON.parse(
                     donnees.toString()
                 );
+
+            if (traiterEvenementAppelJJM(socket, message)) {
+                return;
+            }
 
             if (
                 message.type !==
@@ -1565,6 +1953,30 @@ wss.on("connection", (socket, req) => {
             connexionsJJM.get(identifiant)
             === socket
         ) {
+            const appelId = appelsParUtilisateurJJM.get(identifiant);
+            const appel = appelId
+                ? appelsActifsJJM.get(appelId)
+                : null;
+
+            if (appel) {
+                const autreParticipant =
+                    appel.appelant === identifiant
+                        ? appel.destinataire
+                        : appel.appelant;
+
+                envoyerEvenementAppelJJM(autreParticipant, {
+                    type: "appel_termine",
+                    appelId: appel.id,
+                    par: identifiant,
+                    raison: "deconnexion"
+                });
+
+                finaliserAppelJJM(
+                    appel,
+                    appel.statut === "sonnerie" ? "interrompu" : "interrompu"
+                );
+            }
+
             connexionsJJM.delete(
                 identifiant
             );
