@@ -266,9 +266,13 @@ app.post("/api/inscription/demander-code", async (req, res) => {
                 donnees.message || donnees.code || "erreur"
             );
 
+            const detailBrevo = String(
+                donnees.message || donnees.code || "Erreur inconnue"
+            ).replace(/\s+/g, " ").slice(0, 180);
+
             return res.status(502).json({
                 ok: false,
-                message: "Brevo n'a pas pu envoyer l'e-mail. Vérifie l'expéditeur dans Brevo."
+                message: "Erreur Brevo (" + resultat.status + ") : " + detailBrevo
             });
         }
 
