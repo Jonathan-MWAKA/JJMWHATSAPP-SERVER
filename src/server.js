@@ -1,5 +1,7 @@
 require("dotenv").config();
 
+const { testerConnexionPostgres } = require("./db");
+
 const express = require("express");
 const crypto = require("crypto");
 const path = require("path");
@@ -2019,4 +2021,15 @@ serveur.listen(PORT, "0.0.0.0", () => {
     console.log(
         `http://127.0.0.1:${PORT}/health`
     );
+
+    testerConnexionPostgres()
+        .then(() => {
+            console.log("PostgreSQL connecté avec succès.");
+        })
+        .catch((erreur) => {
+            console.error(
+                "Échec de connexion PostgreSQL :",
+                erreur.code || erreur.message
+            );
+        });
 });
